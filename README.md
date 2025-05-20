@@ -40,8 +40,6 @@ Das Projekt dient dazu, meine Fähigkeiten in Full-Stack-Entwicklung mit generat
 
 ## 📁 Projektstruktur (Monorepo)
 
-## 🗂️ Projektstruktur (Monorepo)
-
 ```plaintext
 ai-copilot/
 ├── frontend/       # Vue 3 App
