@@ -40,11 +40,14 @@ Das Projekt dient dazu, meine Fähigkeiten in Full-Stack-Entwicklung mit generat
 
 ## 📁 Projektstruktur (Monorepo)
 
-ai-copilot/
-├── frontend/ # Vue 3 App
-├── backend/ # NestJS API
-└── README.md
+## 🗂️ Projektstruktur (Monorepo)
 
+```plaintext
+ai-copilot/
+├── frontend/       # Vue 3 App
+├── backend/        # NestJS API
+└── README.md
+```
 ## 🧠 Motivation
 
 Ich arbeite seit mehreren Monaten fokussiert auf dieses Projekt, um meine Kenntnisse in modernen Webtechnologien mit KI zu vertiefen – mit dem langfristigen Ziel, mich bei einem zukunftsorientierten Unternehmen zu bewerben.
