@@ -1,15 +1,15 @@
-# Frontend – AI Copilot
+## Frontend – AI Copilot
 
 This is the frontend of the AI Copilot project, built with **Vue 3**, **Vite**, **Pinia**, **Vue Router**, and **Tailwind CSS**.
 
-## 🚀 Getting Started
+### 🚀 Getting Started
 
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-## 🗂️ Project Structure
+### 🗂️ Project Structure
 
 - `src/components/` – Reusable UI components  
 - `src/views/` – Page-level views (e.g., Login, Dashboard)  
@@ -18,7 +18,7 @@ npm run dev
 
 ---
 
-## ✅ Features (Planned)
+### ✅ Features (Planned)
 
 - User login & registration  
 - Protected routes (e.g. `/dashboard`)  
