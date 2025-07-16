@@ -1,0 +1,48 @@
+version: '3.9'
+
+services:
+  backend:
+    build: ./backend
+    container_name: ai-backend
+    ports:
+      - '3000:3000'
+    env_file:
+      - ./backend/.env
+    depends_on:
+      - db
+      - ai-langchain-service
+    command: npm run start:dev
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - ai-network
+
+  frontend:
+    build: ./frontend
+    container_name: ai-frontend
+    ports:
+      - '5173:5173'
+    volumes:
+      - ./frontend:/app
+    command: npm run dev
+    networks:
+      - ai-network
+      
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: ai-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - '5050:80'
+    depends_on:
+      - db
+    networks:
+      - ai-network
+
+volumes:
+  pgdata:
+
+networks:
+  ai-network:
