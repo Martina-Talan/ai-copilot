@@ -5,5 +5,3 @@ dist
 coverage
 .DS_Store" > .gitignore
 
-git add .gitignore
-git commit -m "chore: add .gitignore"
