@@ -1,0 +1,9 @@
+echo "node_modules
+dist
+.env
+.vscode
+coverage
+.DS_Store" > .gitignore
+
+git add .gitignore
+git commit -m "chore: add .gitignore"
