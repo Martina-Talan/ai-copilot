@@ -10,7 +10,6 @@ services:
       - ./backend/.env
     depends_on:
       - db
-      - ai-langchain-service
     command: npm run start:dev
     volumes:
       - ./backend/uploads:/app/uploads
@@ -25,6 +24,20 @@ services:
     volumes:
       - ./frontend:/app
     command: npm run dev
+    networks:
+      - ai-network
+
+  db:
+    image: postgres:15
+    container_name: ai-db
+    environment:
+      POSTGRES_DB: ai_copilot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     networks:
       - ai-network
       
