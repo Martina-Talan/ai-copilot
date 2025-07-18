@@ -43,7 +43,11 @@ describe('AuthService', () => {
         }) as User,
     );
 
-    const result = await service.register('test@example.com', 'password123');
+    const result = await service.register(
+      'test@example.com',
+      'password123',
+      'testuser',
+    );
     expect(result.message).toBe('User successfully registered');
     expect(result.user.email).toBe('test@example.com');
   });
@@ -52,6 +56,7 @@ describe('AuthService', () => {
     const mockUser = {
       id: 1,
       email: 'test@example.com',
+      username: 'testuser',
       password: await bcrypt.hash('password123', 10),
     };
 
