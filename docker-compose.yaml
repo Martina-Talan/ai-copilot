@@ -10,6 +10,7 @@ services:
       - ./backend/.env
     depends_on:
       - db
+      - ai-langchain-service
     command: npm run start:dev
     volumes:
       - ./backend/uploads:/app/uploads
@@ -24,6 +25,20 @@ services:
     volumes:
       - ./frontend:/app
     command: npm run dev
+    networks:
+      - ai-network
+
+  ai-langchain-service:
+    build: ./ai-langchain-service
+    container_name: ai-langchain
+    ports:
+      - '3001:3001'
+      - '3002:3002' 
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./faiss_data:/app/faiss_index
+    env_file:
+      - ./ai-langchain-service/.env 
     networks:
       - ai-network
 
