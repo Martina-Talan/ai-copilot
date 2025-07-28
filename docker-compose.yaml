@@ -11,6 +11,7 @@ services:
     depends_on:
       - db
       - ai-langchain-service
+      - python-rag-service
     command: npm run start:dev
     volumes:
       - ./backend/uploads:/app/uploads
@@ -27,7 +28,7 @@ services:
     command: npm run dev
     networks:
       - ai-network
-
+      
   ai-langchain-service:
     build: ./ai-langchain-service
     container_name: ai-langchain
@@ -42,6 +43,20 @@ services:
     networks:
       - ai-network
 
+    # REPLACED SERVICE
+  python-rag-service:
+    build: ./python-rag-service  # New Python service directory
+    container_name: python-rag
+    ports:
+      - '8001:8000'  # FastAPI default port
+    volumes:
+      - ./backend/uploads:/app/uploads  # Same volume as before
+      - ./faiss_data:/app/faiss_index   # FAISS data remains compatible
+    env_file:
+      - ./python-rag-service/.env  # New env file for Python
+    networks:
+      - ai-network
+
   db:
     image: postgres:15
     container_name: ai-db
@@ -50,12 +65,12 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - '5432:5432'
+      - '5433:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
       - ai-network
-      
+
   pgadmin:
     image: dpage/pgadmin4
     container_name: ai-pgadmin

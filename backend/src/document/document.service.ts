@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Document as DocumentEntity } from './entity/document.entity';
 import { User } from '../user/entity/user.entity';
+import axios from 'axios';
 
 @Injectable()
 export class DocumentService {
@@ -72,7 +73,25 @@ export class DocumentService {
     const doc = this.documentRepo.create({ filename, path, user });
 
     try {
-      return await this.documentRepo.save(doc);
+      const savedDoc = await this.documentRepo.save(doc);
+      console.log('📤 Calling Python embedding service');
+      try {
+        await axios.post<void>(
+          'http://python-rag-service:8000/api/generate-embeddings',
+          {
+            path,
+            filename,
+            id: String(savedDoc.id),
+          },
+        );
+        this.logger.log(`Embeddings generated for document ${savedDoc.id}`);
+      } catch (error: any) {
+        this.logger.error(
+          `Failed to generate embeddings for document ${savedDoc.id}: ${error.message}`,
+        );
+      }
+
+      return savedDoc;
     } catch (error) {
       this.logger.error(
         `Failed to save document metadata for user ${userId}`,
