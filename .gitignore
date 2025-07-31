@@ -1,7 +1,38 @@
-echo "node_modules
-dist
-.env
-.vscode
-coverage
-.DS_Store" > .gitignore
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
 
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+*.pyo
+*.pyd
+*.pyc
+venv/
+.env
+
+# FAISS & uploads
+faiss_data/
+uploads/
+*.onnx
+
+# FastAPI/OpenAI temp files
+*.log
+
+# IDE/editor configs
+.vscode/
+.idea/
+.DS_Store
+
+# Test coverage
+coverage/
+htmlcov/
+.cache/
+pytest_cache/
+
+# Docker
+*.pid
