@@ -34,6 +34,27 @@ export class UserService {
     }
   }
 
+  async findByUsername(username: string): Promise<User | null> {
+    try {
+      return await this.userRepo.findOne({ where: { username } });
+    } catch (error) {
+      this.logger.error(
+        `Error finding user by username: ${username}`,
+        error.stack,
+      );
+      throw new InternalServerErrorException('Could not fetch user');
+    }
+  }
+
+  async findById(id: number): Promise<User | null> {
+    try {
+      return await this.userRepo.findOne({ where: { id } });
+    } catch (error) {
+      this.logger.error(`Error finding user by ID: ${id}`, error.stack);
+      throw new InternalServerErrorException('Could not fetch user');
+    }
+  }
+
   async deleteAll(): Promise<void> {
     try {
       await this.userRepo.clear();

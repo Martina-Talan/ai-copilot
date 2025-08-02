@@ -6,7 +6,6 @@ import {
   Matches,
   MaxLength,
   MinLength,
-  NotContains,
 } from 'class-validator';
 
 export class CreateUserDto {
@@ -23,7 +22,6 @@ export class CreateUserDto {
   @IsNotEmpty()
   @MinLength(3)
   @MaxLength(50)
-  @NotContains(' ')
   username: string;
 
   @ApiProperty()
