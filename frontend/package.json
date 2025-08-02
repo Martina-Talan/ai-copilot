@@ -13,7 +13,7 @@
     "bootstrap-icons": "^1.13.1",
     "pdfjs-dist": "^3.4.120",
     "pinia": "^3.0.2",
-    "pinia-plugin-persistedstate": "^4.3.0",
+    "pinia-plugin-persistedstate": "^4.4.1",
     "t-writer.js": "^1.0.4",
     "vue": "^3.5.13",
     "vue-pdf-app": "^2.1.0",
