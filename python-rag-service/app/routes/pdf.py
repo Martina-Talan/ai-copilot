@@ -1,7 +1,7 @@
-# routes/pdf.py
 from fastapi import APIRouter
 from pydantic import BaseModel
-from app.services.pdf_viewer import extract_pdf_pages
+from app.services.pdf_viewer import PDFProcessor
+
 
 router = APIRouter()
 
