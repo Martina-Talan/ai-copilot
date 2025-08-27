@@ -1,39 +1,121 @@
 import pytest
-from langchain_core.documents import Document
-from app.services.pdf_viewer import PDFProcessor
+from app.services.pdf_viewer import PDFProcessor, PDFProcessorConfig
 
-def test_extract_pdf_pages_with_mocked_fitz_and_splitter(mocker):
-    mock_open = mocker.patch("app.services.pdf_viewer.fitz.open")
-    mock_ctx = mocker.MagicMock()
-    mock_doc = mocker.MagicMock()
-    mock_ctx.__enter__.return_value = mock_doc
-    mock_ctx.__exit__.return_value = False
-    mock_open.return_value = mock_ctx
 
-    mock_doc.__len__.return_value = 2
-    mock_page1 = mocker.MagicMock()
-    mock_page1.get_text.return_value = "## Heading 1\nSome text on page 1"
-    mock_page2 = mocker.MagicMock()
-    mock_page2.get_text.return_value = "## Heading 2\nSome text on page 2"
-    mock_doc.load_page.side_effect = [mock_page1, mock_page2]
+# ---------- Fake PDF ----------
 
-    split_mock_cls = mocker.patch("app.services.pdf_viewer.AdvancedTextSplitter")
-    split_inst = split_mock_cls.return_value
-    split_inst.split_text.side_effect = lambda text, document_id, page_number: [
-        Document(
-            page_content=f"chunk from page {page_number}",
-            metadata={"documentId": document_id, "pageNumber": page_number, "chunkType": "generic"},
-        )
-    ]
+class FakePage:
+    def __init__(self, text=""):
+        self._text = text
+        self.number = 0
 
-    processor = PDFProcessor()
-    result = processor.extract_pdf_pages(source="dummy.pdf", doc_id="doc123")
+    def get_text(self, kind="text"):
+        return self._text
 
-    assert result["metadata"]["documentId"] == "doc123"
-    assert result["metadata"]["totalPages"] == 2
-    assert len(result["pages"]) == 2
-    assert result["pages"][0]["headings"][0]["text"] == "Heading 1"
-    assert result["pages"][1]["headings"][0]["text"] == "Heading 2"
-    assert len(result["chunks"]) == 2
-    assert result["chunks"][0]["metadata"]["pageNumber"] == 1
-    assert result["chunks"][1]["metadata"]["pageNumber"] == 2
+
+class FakeDoc:
+    """Minimal context manager simulating fitz.open result."""
+    def __init__(self, pages_text):
+        self._pages = [FakePage(t) for t in pages_text]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def __len__(self):
+        return len(self._pages)
+
+    def load_page(self, i: int):
+        return self._pages[i]
+
+
+# ---------- Fixture ----------
+
+@pytest.fixture
+def cfg_default():
+    return PDFProcessorConfig(
+        use_ocr_fallback=True,
+        max_pages=None,
+        keep_full_page_text=True,
+        skip_empty_pages=True,
+        trim_whitespace=True,
+    )
+
+
+# ---------- Tests ----------
+
+def test_embedded_text_path(monkeypatch, cfg_default):
+    """
+    If PDF has embedded text, OCR is not called
+    and 'text' is returned as the source.
+    """
+    def fake_open(**kwargs):
+        return FakeDoc(["Hello world"])
+    monkeypatch.setattr("app.services.pdf_viewer.fitz.open", fake_open)
+
+    def ocr_fn_should_not_be_called(page):
+        raise AssertionError("OCR should not be called for embedded text")
+
+    proc = PDFProcessor(cfg=cfg_default, ocr_fn=ocr_fn_should_not_be_called)
+    out = proc.extract_pdf_pages(source=b"%PDF-FAKE%", doc_id="doc1")
+
+    assert "error" not in out
+    assert out["metadata"]["documentId"] == "doc1"
+    assert out["pages"][0]["textSource"] == "text"
+    assert out["pages"][0]["content"] == "Hello world"
+
+
+def test_skip_empty_pages(monkeypatch):
+    """
+    If the page is empty and skip_empty_pages=True, it is skipped.
+    """
+    def fake_open(**kwargs):
+        return FakeDoc(["   \n\n   "])
+    monkeypatch.setattr("app.services.pdf_viewer.fitz.open", fake_open)
+
+    cfg = PDFProcessorConfig(
+        use_ocr_fallback=False,
+        max_pages=None,
+        keep_full_page_text=True,
+        skip_empty_pages=True,
+        trim_whitespace=True,
+    )
+    proc = PDFProcessor(cfg=cfg, ocr_fn=None)
+    out = proc.extract_pdf_pages(source=b"%PDF-FAKE%", doc_id="doc-empty")
+
+    assert "error" not in out
+    assert out["pages"] == []
+
+
+def test_trim_and_cleaning(monkeypatch, cfg_default):
+    """
+    Cleansing removes whitespace, 'Confidential', and page numbers.
+    """
+    raw = "  Confidential  \n\n  123  \n Actual  text \n\n"
+    def fake_open(**kwargs):
+        return FakeDoc([raw])
+    monkeypatch.setattr("app.services.pdf_viewer.fitz.open", fake_open)
+
+    proc = PDFProcessor(cfg=cfg_default, ocr_fn=None)
+    out = proc.extract_pdf_pages(source=b"%PDF-FAKE%", doc_id="doc-clean")
+
+    assert "error" not in out
+    txt = out["pages"][0]["content"]
+    assert txt == "Actual text"
+
+
+def test_error_payload_on_unexpected_failure(monkeypatch, cfg_default):
+    """
+    If fitz.open raises an error, a clear error payload is returned (no crash).
+    """
+    def fake_open(**kwargs):
+        raise RuntimeError("boom")
+    monkeypatch.setattr("app.services.pdf_viewer.fitz.open", fake_open)
+
+    proc = PDFProcessor(cfg=cfg_default, ocr_fn=None)
+    out = proc.extract_pdf_pages(source=b"%PDF-FAKE%", doc_id="doc-fail")
+
+    assert out["error"] == "PDF processing failed"
+    assert out["documentId"] == "doc-fail"

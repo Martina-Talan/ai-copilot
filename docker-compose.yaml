@@ -43,17 +43,25 @@ services:
     networks:
       - ai-network
 
-    # REPLACED SERVICE
   python-rag-service:
-    build: ./python-rag-service  # New Python service directory
+    build: ./python-rag-service 
     container_name: python-rag
     ports:
-      - '8001:8000'  # FastAPI default port
+      - '8001:8000'  
     volumes:
-      - ./backend/uploads:/app/uploads  # Same volume as before
-      - ./faiss_data:/app/faiss_index   # FAISS data remains compatible
+      - ./backend/uploads:/app/uploads 
+      - ./faiss_data:/app/faiss_index   
+      - ./ocr_cache:/app/ocr_cache  
+      - ./models/hf:/models/hf
     env_file:
-      - ./python-rag-service/.env  # New env file for Python
+      - ./python-rag-service/.env 
+    environment:
+      HF_HOME: /models/hf
+      TRANSFORMERS_CACHE: /models/hf
+      RERANKER_DISABLED: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
     networks:
       - ai-network
 
