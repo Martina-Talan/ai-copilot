@@ -1,63 +1,73 @@
 import pytest
-from app.services.chunk_text import AdvancedTextSplitter
-from langchain_core.documents import Document
+from app.services.chunk_text import TextSplitter, SplitConfig
+
+# ---------- Fixture ----------
 
 @pytest.fixture
-def mock_encoder(mocker):
-    mock = mocker.patch("app.services.chunk_text.tiktoken.get_encoding")
-    encoder = mock.return_value
-    encoder.encode.side_effect = lambda x: list(range(len(x)))
-    return encoder
+def splitter():
+    cfg = SplitConfig(
+        rec_chunk_size=500,
+        rec_overlap=50, 
+    )
+    return TextSplitter(cfg=cfg, semantic_mode=False) 
 
 @pytest.fixture
-def mock_embeddings(mocker):
-    return mocker.patch("app.services.chunk_text.OpenAIEmbeddings")
+def splitter_legal():
+    return TextSplitter(cfg=SplitConfig(), semantic_mode=False, legal_mode=True)
 
-def test_empty_text_returns_empty_list(mock_encoder, mock_embeddings):
-    splitter = AdvancedTextSplitter(semantic_mode=True)
-    result = splitter.split_text("", document_id="doc1")
-    assert result == []
 
-def test_legal_mode_splits_by_sections(mock_encoder, mock_embeddings):
-    text = "§1 First section text.\n§2 Second section text."
-    splitter = AdvancedTextSplitter(legal_mode=True, semantic_mode=False)
-    result = splitter.split_text(text, document_id="doc2")
+# ---------- Tests ----------
 
-    assert len(result) == 2
-    assert all(doc.metadata["chunkType"] == "legal" for doc in result)
-    assert result[0].metadata["heading"] == "§1"
-    assert result[1].metadata["heading"] == "§2"
+def test_generic_chunking_short_text(splitter):
+    content = "This is a short paragraph that doesn't need splitting."
+    chunks = splitter.split_text(content, document_id="doc-1")
 
-def test_headings_split_correctly(mock_encoder, mock_embeddings, mocker):
-    text = "## Intro\nIntro text\n\n## Details\nMore text"
+    assert len(chunks) == 1
+    assert chunks[0].metadata["chunkType"] == "generic"
+    assert "short paragraph" in chunks[0].page_content
 
-    mocker.patch("app.services.chunk_text.AdvancedTextSplitter._remove_boilerplate", return_value=text)
+def test_heading_chunking(splitter):
+    content = "# Title\nThis is section one.\n\n## Subtitle\nThis is section two."
+    chunks = splitter.split_text(content, document_id="doc-2")
 
-    splitter = AdvancedTextSplitter(legal_mode=False, semantic_mode=False)
-    result = splitter.split_text(text, document_id="doc3")
+    assert len(chunks) == 2
+    assert chunks[0].metadata["heading"] == "Title"
+    assert chunks[0].metadata["chunkType"] == "hierarchical"
+    assert "section one" in chunks[0].page_content
 
-    assert len(result) >= 2
-    assert result[0].metadata["chunkType"] == "hierarchical"
-    assert result[0].metadata["heading"] == "Intro"
+def test_legal_chunking(splitter_legal):
+    content = "§1 This is section one.\n\n§2 This is section two."
+    chunks = splitter_legal.split_text(content, document_id="doc-3")
 
-def test_generic_fallback_chunking(mock_encoder, mock_embeddings):
-    text = "No headings or legal symbols. Just plain text. " * 20
-    splitter = AdvancedTextSplitter(legal_mode=False, semantic_mode=False)
-    result = splitter.split_text(text, document_id="doc4")
+    assert len(chunks) == 2
+    assert chunks[0].metadata["heading"] == "§1"
+    assert chunks[0].metadata["chunkType"] == "legal"
+    assert "section one" in chunks[0].page_content
 
-    assert len(result) >= 1
-    assert all(doc.metadata["chunkType"] in ("generic", "recursive") for doc in result)
+def test_boilerplate_cleanup(splitter):
+    content = "   Confidential   \n\n\n123\n\nReal content.\n\n"
+    cleaned = splitter._remove_boilerplate(content)
 
-def test_semantic_chunking_fallbacks_to_recursive(mock_encoder, mocker):
-    text = "This is a long sentence. " * 100
-    mock_encoder.encode.side_effect = lambda x: list(range(len(x)))
-    mocker.patch("app.services.chunk_text.OpenAIEmbeddings", return_value=mocker.Mock())
-    mock_semantic_chunker = mocker.patch("app.services.chunk_text.SemanticChunker")
-    mock_semantic_chunker_instance = mock_semantic_chunker.return_value
-    mock_semantic_chunker_instance.create_documents.side_effect = Exception("fail")
+    assert "Confidential" not in cleaned
+    assert "123" not in cleaned
+    assert "Real content." in cleaned
 
-    splitter = AdvancedTextSplitter(semantic_mode=True)
-    result = splitter.split_text(text, document_id="doc5")
+def test_recursive_chunking_used_if_no_embeddings():
+    cfg = SplitConfig(
+        rec_chunk_size=200,
+        rec_overlap=20,
+        max_tokens_single=100,
+    )
+    splitter = TextSplitter(cfg=cfg, semantic_mode=False)
 
-    assert len(result) > 0
-    assert all(doc.metadata["chunkType"] == "recursive" for doc in result)
+    long_text = "This sentence. " * 100
+    chunks = splitter.split_text(long_text, document_id="doc-4")
+
+    assert len(chunks) > 1
+    assert all("This sentence" in c.page_content for c in chunks)
+
+def test_id_line_preserved_after_cleanup(splitter):
+    raw = "Calculation ID:\n902310\nThe client confirms..."
+    cleaned = splitter._remove_boilerplate(raw)
+    assert "902310" in cleaned
+    assert "Calculation ID" in cleaned
