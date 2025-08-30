@@ -23,13 +23,6 @@ SPACE_RE = re.compile(r"[ \t]+")
 BLANKS_RE = re.compile(r"\n{3,}")
 BOILERPLATE_WORDS_RE = re.compile(r"^(?:\s*(?:Confidential|Draft|\d+)\s*)$", re.IGNORECASE | re.MULTILINE)
 
-COMPANY_RE = re.compile(
-    r'\b[A-ZÄÖÜ][\wÄÖÜäöüß&.\- ]{1,60}\b(?:GmbH|AG|UG|KG|OHG|e\.K\.?|e\.V\.)\b', re.U)
-STREET_RE = re.compile(
-    r'\b[\wÄÖÜäöüß.\- ]{2,80}(?:straße|str\.|weg|platz|allee|ring|gasse)\b\s*\d+[a-zA-Z]?\b', re.I | re.U)
-PLZ_CITY_RE = re.compile(
-    r'\b\d{5}\b\s+[A-ZÄÖÜ][A-Za-zÄÖÜäöüß.\- ]{2,}', re.U)
-
 # =============================================================================
 # Token Counter
 # =============================================================================
@@ -70,6 +63,7 @@ class SplitConfig:
     semantic_threshold_amount: int = 95
     min_chars_per_chunk: int = 80
     max_chunks: Optional[int] = None
+    rec_separators: tuple = ("\n\n", "\n", ". ", " ", "") 
 
 # =============================================================================
 # Main Class: TextSplitter
@@ -96,13 +90,11 @@ class TextSplitter:
         logger.info("TextSplitter initialized legal=%s semantic=%s", legal_mode, semantic_mode)
 
     def _remove_boilerplate(self, text: str) -> str:
-        # Zeilen mit ":" + nächste numerische Zeile zusammenführen
         text = re.sub(
             r'(?mi)^([^\n:]{2,}?:)\s*\n\s*(\d{3,})\s*$',
             r'\1 \2',
             text,
         )
-        # Danach wie bisher aufräumen:
         text = BOILERPLATE_WORDS_RE.sub("", text)
         text = SPACE_RE.sub(" ", text)
         text = BLANKS_RE.sub("\n\n", text)
@@ -144,7 +136,7 @@ class TextSplitter:
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.cfg.rec_chunk_size,
             chunk_overlap=self.cfg.rec_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""],
+            separators=list(self.cfg.rec_separators),
         )
         docs = splitter.create_documents([content])
         return [d.page_content for d in docs]
@@ -174,16 +166,14 @@ class TextSplitter:
         if _count_tokens(content) <= self.cfg.max_tokens_single:
             return [self._wrap(content, document_id, page_number, heading, chunk_type)]
 
-        if self.embeddings:
-            parts, used_sem = self._semantic_split(content)
+    
+        used_sem = False
+        parts: List[str]
+        if self.semantic_mode and self.embeddings:
+            parts, used_sem = self._semantic_split(content)          
             final_type = "semantic" if used_sem else "recursive"
         else:
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=self.cfg.rec_chunk_size,
-                chunk_overlap=self.cfg.rec_overlap
-            )
-            parts = [x.page_content for x in splitter.create_documents([content])]
-            used_sem = False
+            parts = self._recursive_split(content)                    
             final_type = "recursive"
 
         meaningful_parts = [p for p in parts if _count_tokens(p) >= 3]
