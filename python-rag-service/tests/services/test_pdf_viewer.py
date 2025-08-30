@@ -37,7 +37,6 @@ class FakeDoc:
 def cfg_default():
     return PDFProcessorConfig(
         use_ocr_fallback=True,
-        max_pages=None,
         keep_full_page_text=True,
         skip_empty_pages=True,
         trim_whitespace=True,
@@ -77,7 +76,6 @@ def test_skip_empty_pages(monkeypatch):
 
     cfg = PDFProcessorConfig(
         use_ocr_fallback=False,
-        max_pages=None,
         keep_full_page_text=True,
         skip_empty_pages=True,
         trim_whitespace=True,
