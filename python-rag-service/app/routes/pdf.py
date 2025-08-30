@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from app.services.pdf_viewer import PDFProcessor, PDFProcessorConfig
-import asyncio
+from anyio import to_thread
 
 router = APIRouter()
 
@@ -12,4 +12,4 @@ class PdfViewRequest(BaseModel):
 @router.post("/view-pdf")
 async def view_pdf_route(data: PdfViewRequest):
     processor = PDFProcessor(cfg=PDFProcessorConfig())
-    return await asyncio.to_thread(processor.extract_pdf_pages, data.path, data.id)
+    return await to_thread.run_sync(processor.extract_pdf_pages, data.path, data.id)

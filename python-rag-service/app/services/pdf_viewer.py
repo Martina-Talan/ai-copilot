@@ -32,7 +32,6 @@ def _page_id(doc_id: str, page_number: int) -> str:
 class PDFProcessorConfig:
     """Controls PDF extraction behavior."""
     use_ocr_fallback: bool = True
-    max_pages: Optional[int] = None
     keep_full_page_text: bool = True
     skip_empty_pages: bool = True
     trim_whitespace: bool = True
@@ -44,11 +43,11 @@ class PDFProcessorConfig:
 
 class PDFProcessor:
     """
-    Extract per-page text from a PDF (no chunking here).
+    Extract per-page text from a PDF.
 
     Flow:
       1) Try embedded text.
-      2) If empty and OCR is enabled and `ocr_fn` is provided, run OCR (no caching).
+      2) If empty and OCR is enabled and `ocr_fn` is provided, run OCR.
       3) Normalize text if configured; skip empty pages if configured.
 
     Returns a dict:
@@ -78,7 +77,7 @@ class PDFProcessor:
         """
         self.cfg = cfg
         self.ocr_fn = ocr_fn
-        logger.info("PDFProcessor init use_ocr=%s max_pages=%s", cfg.use_ocr_fallback, cfg.max_pages)
+        logger.info("PDFProcessor init use_ocr=%s", cfg.use_ocr_fallback)
 
     # --------------------------------------------------------------
     # Main extraction method
@@ -97,13 +96,10 @@ class PDFProcessor:
 
             with fitz.open(**open_kwargs) as doc:
                 total = len(doc)
-                limit = min(self.cfg.max_pages or total, total)
-                if limit < 0:
-                    limit = 0
+               
+                logger.info("Processing PDF doc_id=%s pages=%s", doc_id, total)
 
-                logger.info("Processing PDF doc_id=%s pages=%s (limit=%s)", doc_id, total, limit)
-
-                for i in range(limit):  
+                for i in range(total):  
                     page = doc.load_page(i)
                     page_num = i + 1
 
@@ -133,7 +129,6 @@ class PDFProcessor:
                     "documentId": doc_id,
                     "totalPages": total,
                     "pagesReturned": len(pages_out),
-                    "maxPagesEvaluated": self.cfg.max_pages,
                     "ocrUsed": any(p.get("textSource") == "ocr" for p in pages_out),
                 },
                 "pages": pages_out,
@@ -147,6 +142,7 @@ class PDFProcessor:
     # ==============================================================
     # Internals
     # ==============================================================
+
     def _open_kwargs(self, source: Union[str, bytes], password: Optional[str]) -> Dict[str, Any]:
         """Build arguments for fitz.open()."""
         if isinstance(source, (bytes, bytearray)):
@@ -161,7 +157,7 @@ class PDFProcessor:
 
     def _page_text(self, page: fitz.Page) -> Tuple[str, str]:
         """
-        Return (text, source_tag) using embedded text first, then OCR (no cache).
+        Return (text, source_tag) using embedded text first, then OCR.
         source_tag ∈ {"text", "ocr"}.
         """
         txt = (page.get_text("text") or "").strip()
