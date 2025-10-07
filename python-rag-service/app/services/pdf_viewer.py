@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from uuid import uuid5, NAMESPACE_URL
+import io
 
 import fitz
 
@@ -35,6 +36,7 @@ class PDFProcessorConfig:
     keep_full_page_text: bool = True
     skip_empty_pages: bool = True
     trim_whitespace: bool = True
+    keep_spans: bool = True
 
 
 # ==============================================================
@@ -122,6 +124,10 @@ class PDFProcessor:
                     }
                     if self.cfg.keep_full_page_text:
                         record["content"] = text
+                    
+                    if self.cfg.keep_spans:
+                        record["spans"] = self._page_spans(page)
+
                     pages_out.append(record)
 
             return {
@@ -146,7 +152,8 @@ class PDFProcessor:
     def _open_kwargs(self, source: Union[str, bytes], password: Optional[str]) -> Dict[str, Any]:
         """Build arguments for fitz.open()."""
         if isinstance(source, (bytes, bytearray)):
-            kw: Dict[str, Any] = {"stream": source, "filetype": "pdf"}
+            stream = io.BytesIO(source) 
+            kw: Dict[str, Any] = {"stream": stream, "filetype": "pdf"}
         elif isinstance(source, str):
             kw = {"filename": source}
         else:
@@ -195,3 +202,70 @@ class PDFProcessor:
             hashes = len(line) - len(line.lstrip("#"))
             out.append({"text": m.group(1).strip(), "level": hashes})
         return out
+
+    def _page_spans(self, page: fitz.Page) -> List[Dict[str, Any]]:
+        """
+        Extract line-level text spans with bounding boxes in PDF coordinate space.
+
+        The returned rectangles are suitable for pdf.js `convertToViewportRectangle`
+        because they use a bottom-left origin (PDF space). Y is inverted from
+        PyMuPDF's top-left origin.
+
+        Args:
+            page (fitz.Page): The PDF page to inspect.
+
+        Returns:
+            List[Dict[str, Any]]: A list of line records, each containing:
+                - "text" (str): Concatenated line text (trimmed).
+                - "bbox" (Dict[str, float]): Rectangle with keys {x, y, width, height}
+                in PDF units, where (x, y) is the **bottom-left** corner.
+
+        Notes:
+            - Uses `page.get_text("rawdict")` for stable line geometry and spans.
+            - On failure, logs a warning and returns an empty list.
+            - Lines with empty text or non-positive geometry are skipped.
+        """
+        spans_out: List[Dict[str, Any]] = []
+        try:
+            raw = page.get_text("rawdict") or {}
+            height = float(page.rect.height)
+
+            blocks = raw.get("blocks") or []
+            for b_idx, block in enumerate(blocks):
+                for l_idx, line in enumerate(block.get("lines") or []):
+                    try:
+                        bbox = line.get("bbox") or (0, 0, 0, 0)
+                        x0, y0, x1, y1 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+
+                        w = x1 - x0
+                        h = y1 - y0
+                        if w <= 0 or h <= 0:
+                            continue
+
+                        text = "".join(span.get("text", "") for span in (line.get("spans") or []))
+                        text = text.strip()
+                        if not text:
+                            continue
+
+                        y_bottom = height - y1
+
+                        spans_out.append({
+                            "text": text,
+                            "bbox": {"x": x0, "y": y_bottom, "width": w, "height": h},
+                        })
+                    except Exception:
+                        logger.debug(
+                            "Failed to parse line b=%s l=%s on page %s",
+                            b_idx, l_idx, getattr(page, "number", "?"),
+                            exc_info=True,
+                        )
+
+            return spans_out
+
+        except Exception:
+            logger.warning(
+                "Span extraction failed on page %s",
+                getattr(page, "number", "?"),
+                exc_info=True,
+            )
+            return []
