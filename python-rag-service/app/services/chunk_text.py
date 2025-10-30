@@ -33,16 +33,17 @@ try:
 
     def _count_tokens(s: str) -> int:
         return len(_ENCODER.encode(s))
-except Exception:
+except ImportError:
     _ENCODER = None
 
     def _count_tokens(s: str) -> int:
-        return max(1, len(s) // 4)
+        words = len(s.split())
+        chars = len(s)
+        return max(1, int((words * 1.3) + (chars * 0.2)))
 
 # =============================================================================
 # Helpers
 # =============================================================================
-
 
 def _mk_id(*parts: Optional[Union[str, int]]) -> str:
     """Generate deterministic UUIDv5-based ID (16 hex chars)."""
@@ -75,9 +76,11 @@ class TextSplitter:
     markdown heading parsing, and recursive fallback.
     """
 
+    _embeddings_cache = {}
+
     def __init__(
         self,
-        embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large"),
+        embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
         legal_mode: bool = False,
         semantic_mode: bool = True,
         embeddings: Optional[OpenAIEmbeddings] = None,
@@ -86,10 +89,25 @@ class TextSplitter:
         self.legal_mode = legal_mode
         self.semantic_mode = semantic_mode
         self.cfg = cfg
-        self.embeddings = embeddings or (OpenAIEmbeddings(model=embedding_model) if semantic_mode else None)
+        
+        if embeddings:
+            self.embeddings = embeddings
+        elif semantic_mode:
+            cache_key = embedding_model
+            if cache_key not in self._embeddings_cache:
+                logger.info(f"Creating new embeddings instance for {embedding_model}")
+                self._embeddings_cache[cache_key] = OpenAIEmbeddings(model=embedding_model)
+            self.embeddings = self._embeddings_cache[cache_key]
+        else:
+            self.embeddings = None
+            
         logger.info("TextSplitter initialized legal=%s semantic=%s", legal_mode, semantic_mode)
 
     def _remove_boilerplate(self, text: str) -> str:
+        """Remove boilerplate text and normalize whitespace."""
+        if not text:
+            return ""
+            
         text = re.sub(
             r'(?mi)^([^\n:]{2,}?:)\s*\n\s*(\d{3,})\s*$',
             r'\1 \2',
@@ -116,20 +134,34 @@ class TextSplitter:
             sections.append(current)
         return sections
 
-    def _wrap(self, content: str, document_id: str, page_number: Optional[int], heading: Optional[str], chunk_type: str) -> Document:
+    def _wrap(
+        self, 
+        content: str, 
+        document_id: str, 
+        page_number: Optional[int], 
+        heading: Optional[str], 
+        chunk_type: str,         
+        bbox: Optional[Dict[str, float]] = None,
+    ) -> Document:
         """Wrap raw text into LangChain Document with metadata."""
         token_count = _count_tokens(content)
-        return Document(
-            page_content=content,
-            metadata={
-                "documentId": document_id,
-                "pageNumber": page_number,
-                "heading": heading,
-                "chunkType": chunk_type,
-                "tokenCount": token_count,
-                "chunkId": _mk_id(document_id, page_number, heading, chunk_type, content[:160]),
+        meta: Dict[str, Any] = {
+            "documentId": document_id,
+            "pageNumber": page_number,
+            "heading": heading,
+            "chunkType": chunk_type,
+            "tokenCount": token_count,
+            "chunkId": _mk_id(document_id, page_number, heading, chunk_type, content[:160]),
+        }
+        if bbox:
+            meta["bbox"] = {
+                "x": float(bbox.get("x", 0.0)),
+                "y": float(bbox.get("y", 0.0)),
+                "width": float(bbox.get("width", 0.0)),
+                "height": float(bbox.get("height", 0.0)),
+                "page": int(bbox.get("page", page_number or 1)),
             }
-        )
+        return Document(page_content=content, metadata=meta)
 
     def _recursive_split(self, content: str) -> List[str]:
         """Split content using recursive character-based strategy."""
@@ -154,26 +186,133 @@ class TextSplitter:
             )
             docs = sc.create_documents([content])
             return [d.page_content for d in docs], True
-        except Exception:
-            logger.exception("Semantic chunking failed, falling back to recursive")
+        except ImportError as e:
+            logger.warning(f"SemanticChunker not available: {e}")
+            return self._recursive_split(content), False
+        except Exception as e:
+            logger.error(f"Semantic chunking failed: {str(e)}")
             return self._recursive_split(content), False
 
-    def _chunk_with_metadata(
-        self, content: str, document_id: str, page_number: Optional[int], heading: Optional[str], chunk_type: str
-    ) -> List[Document]:
-        """Chunk content and wrap with metadata, filtering out tiny fragments."""
+    # =============================================================================
+    # Span-Aware Chunking
+    # =============================================================================
 
+    @staticmethod
+    def _union_bbox(spans: List[Dict[str, Any]], page_number: int) -> Optional[Dict[str, float]]:
+        """Calculate union bounding box from multiple spans."""
+        if not spans:
+            return None
+
+        valid_spans = [s for s in spans if s.get("bbox")]
+        if not valid_spans:
+            return None
+            
+        xs = [s["bbox"]["x"] for s in valid_spans]
+        ys = [s["bbox"]["y"] for s in valid_spans]
+        xe = [s["bbox"]["x"] + s["bbox"]["width"] for s in valid_spans]
+        ye = [s["bbox"]["y"] + s["bbox"]["height"] for s in valid_spans]
+        
+        x = float(min(xs))
+        y = float(min(ys))
+        width = float(max(xe) - x)
+        height = float(max(ye) - y)
+        
+        return {"x": x, "y": y, "width": width, "height": height, "page": page_number}
+
+    def _chunk_by_spans(
+        self,
+        spans: List[Dict[str, Any]],
+        document_id: str,
+        page_number: int,
+        heading: Optional[str] = None,
+    ) -> List[Document]:
+        """
+        Chunk text by sequentially grouping spans from the same page.
+        """
+        chunks: List[Document] = []
+        if not spans:
+            return chunks
+
+        current_spans: List[Dict[str, Any]] = []
+        current_text_parts: List[str] = []
+        current_tokens = 0
+
+        def flush_chunk():
+            """Flush current spans as a chunk."""
+            nonlocal current_spans, current_text_parts, current_tokens
+            if not current_text_parts:
+                return
+                
+            text = "\n".join(current_text_parts).strip()
+            if len(text) < self.cfg.min_chars_per_chunk:
+                if chunks and chunks[-1].metadata.get("pageNumber") == page_number:
+                    last_chunk = chunks[-1]
+                    combined_text = last_chunk.page_content + "\n" + text
+                    if _count_tokens(combined_text) <= self.cfg.rec_chunk_size * 1.2:
+                        last_chunk.page_content = combined_text
+                current_spans, current_text_parts, current_tokens = [], [], 0
+                return
+                
+            bbox = self._union_bbox(current_spans, page_number)
+            chunks.append(
+                self._wrap(
+                    text, document_id, page_number, heading, "by_spans", bbox=bbox
+                )
+            )
+            current_spans, current_text_parts, current_tokens = [], [], 0
+
+        for span in spans:
+            if not isinstance(span, dict):
+                continue
+                
+            text = (span.get("text") or "").strip()
+            if not text:
+                continue
+                
+            token_count = _count_tokens(text)
+      
+            if token_count > self.cfg.rec_chunk_size:
+                flush_chunk()
+                bbox = span.get("bbox")
+                chunks.append(
+                    self._wrap(text, document_id, page_number, heading, "by_spans", bbox=bbox)
+                )
+                continue
+            
+            if current_tokens + token_count > self.cfg.rec_chunk_size:
+                flush_chunk()
+            
+            current_spans.append(span)
+            current_text_parts.append(text)
+            current_tokens += token_count
+
+        flush_chunk()
+        return chunks
+
+    # =============================================================================
+    # Main Chunking Methods
+    # =============================================================================
+
+    def _chunk_with_metadata(
+        self, 
+        content: str, 
+        document_id: str, 
+        page_number: Optional[int], 
+        heading: Optional[str], 
+        chunk_type: str
+    ) -> List[Document]:
+        """Chunk content and wrap with metadata."""
         if _count_tokens(content) <= self.cfg.max_tokens_single:
             return [self._wrap(content, document_id, page_number, heading, chunk_type)]
 
-    
-        used_sem = False
+        used_semantic = False
         parts: List[str]
+        
         if self.semantic_mode and self.embeddings:
-            parts, used_sem = self._semantic_split(content)          
-            final_type = "semantic" if used_sem else "recursive"
+            parts, used_semantic = self._semantic_split(content)
+            final_type = "semantic" if used_semantic else "recursive"
         else:
-            parts = self._recursive_split(content)                    
+            parts = self._recursive_split(content)
             final_type = "recursive"
 
         meaningful_parts = [p for p in parts if _count_tokens(p) >= 3]
@@ -183,57 +322,90 @@ class TextSplitter:
             for p in meaningful_parts
         ]
 
-    # --------------------------------------------------------------
-    # Main methods
-    # --------------------------------------------------------------
-
-    def split_text(self, text: str, document_id: str, page_number: Optional[int] = None) -> List[Document]:
+    def split_text(
+        self, 
+        text: str, 
+        document_id: str, 
+        page_number: Optional[int] = None
+    ) -> List[Document]:
         """
         Public entry: clean, split and wrap text into structured Document chunks.
-
-        Prioritizes:
-        1. Legal splitting (if `§` present and legal_mode is on)
-        2. Markdown-style headings
-        3. Generic fallback
-
-        Returns:
-            List[Document]: Structured chunks with rich metadata.
         """
-        text = self._remove_boilerplate(text)
-        if not text.strip():
+        cleaned_text = self._remove_boilerplate(text)
+        if not cleaned_text.strip():
             return []
 
-        if self.legal_mode and "§" in text:
-            sections = [p.strip() for p in LEGAL_SPLIT_RE.split(text) if p.strip()]
-            out: List[Document] = []
-            for sec in sections:
-                m = LEGAL_HEAD_RE.search(sec)
-                heading = f"§{m.group(1)}" if m else "§"
-                out.extend(self._chunk_with_metadata(sec, document_id, page_number, heading, "legal"))
-            return out
+        # Legal document processing
+        if self.legal_mode and "§" in cleaned_text:
+            sections = [p.strip() for p in LEGAL_SPLIT_RE.split(cleaned_text) if p.strip()]
+            chunks: List[Document] = []
+            for section in sections:
+                match = LEGAL_HEAD_RE.search(section)
+                heading = f"§{match.group(1)}" if match else "§"
+                chunks.extend(self._chunk_with_metadata(
+                    section, document_id, page_number, heading, "legal"
+                ))
+            return chunks
 
-        hs = self._split_by_headings(text)
-        if len(hs) > 1:
-            out: List[Document] = []
-            for s in hs:
-                body = "\n".join(s["content"]).strip()
-                if not body:
-                    continue
-                out.extend(self._chunk_with_metadata(body, document_id, page_number, s["heading"], "hierarchical"))
-            return out
+        # Heading-based processing
+        heading_sections = self._split_by_headings(cleaned_text)
+        if len(heading_sections) > 1:
+            chunks: List[Document] = []
+            for section in heading_sections:
+                body_text = "\n".join(section["content"]).strip()
+                if body_text:
+                    chunks.extend(self._chunk_with_metadata(
+                        body_text, document_id, page_number, section["heading"], "hierarchical"
+                    ))
+            return chunks
 
-        return self._chunk_with_metadata(text, document_id, page_number, None, "generic")
+        # Generic processing
+        return self._chunk_with_metadata(cleaned_text, document_id, page_number, None, "generic")
 
-    def split_pdf_pages_combined(self, pages: List[Dict[str, Any]], document_id: str) -> List[Document]:
+    def split_pdf_pages_combined(
+        self, 
+        pages: List[Dict[str, Any]], 
+        document_id: str
+    ) -> List[Document]:
         """
-        New method: combine multiple pages before chunking.
-
-        Args:
-            pages: List of {"text": ..., "pageNumber": ...} from PDFProcessor.
-            document_id: ID of the document.
-
-        Returns:
-            List[Document]: Chunked and wrapped LangChain documents.
+        Combine multiple pages before chunking.
         """
-        full_text = "\n".join(p["text"] for p in pages if p.get("text"))
+        full_text = "\n".join(p.get("text", "") for p in pages if p.get("text"))
         return self.split_text(text=full_text, document_id=document_id, page_number=None)
+
+    def split_pdf_pages_with_spans(
+        self, 
+        pages: List[Dict[str, Any]], 
+        document_id: str
+    ) -> List[Document]:
+        """
+        Chunk PDF pages using span-level geometry information.
+        """
+        all_chunks: List[Document] = []
+        
+        for page in pages:
+            page_number = page.get("pageNumber")
+            if page_number is None:
+                continue
+                
+            try:
+                page_number = int(page_number)
+            except (TypeError, ValueError):
+                continue
+                
+            spans = page.get("spans") or []
+            if spans:
+                page_chunks = self._chunk_by_spans(
+                    spans, document_id, page_number, heading=None
+                )
+                all_chunks.extend(page_chunks)
+            else:
+                text = page.get("content") or page.get("text") or ""
+                if text.strip():
+                    page_chunks = self.split_text(text, document_id, page_number=page_number)
+                    all_chunks.extend(page_chunks)
+
+        if self.cfg.max_chunks and len(all_chunks) > self.cfg.max_chunks:
+            return all_chunks[:self.cfg.max_chunks]
+            
+        return all_chunks
