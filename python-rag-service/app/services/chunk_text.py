@@ -226,67 +226,53 @@ class TextSplitter:
         page_number: int,
         heading: Optional[str] = None,
     ) -> List[Document]:
-        """
-        Chunk text by sequentially grouping spans from the same page.
-        """
         chunks: List[Document] = []
         if not spans:
             return chunks
 
-        current_spans: List[Dict[str, Any]] = []
-        current_text_parts: List[str] = []
-        current_tokens = 0
+        cur_spans: List[Dict[str, Any]] = []
+        cur_texts: List[str] = []
+        cur_tokens = 0
+        limit = self.cfg.rec_chunk_size
+        min_chars = self.cfg.min_chars_per_chunk
 
-        def flush_chunk():
-            """Flush current spans as a chunk."""
-            nonlocal current_spans, current_text_parts, current_tokens
-            if not current_text_parts:
+        def flush():
+            nonlocal cur_spans, cur_texts, cur_tokens
+            if not cur_texts:
                 return
-                
-            text = "\n".join(current_text_parts).strip()
-            if len(text) < self.cfg.min_chars_per_chunk:
+            text = "\n".join(cur_texts).strip()
+            if len(text) < min_chars:
                 if chunks and chunks[-1].metadata.get("pageNumber") == page_number:
-                    last_chunk = chunks[-1]
-                    combined_text = last_chunk.page_content + "\n" + text
-                    if _count_tokens(combined_text) <= self.cfg.rec_chunk_size * 1.2:
-                        last_chunk.page_content = combined_text
-                current_spans, current_text_parts, current_tokens = [], [], 0
+                    merged = chunks[-1].page_content + "\n" + text
+                    if _count_tokens(merged) <= int(limit * 1.2):
+                        chunks[-1].page_content = merged
+                cur_spans, cur_texts, cur_tokens = [], [], 0
                 return
-                
-            bbox = self._union_bbox(current_spans, page_number)
-            chunks.append(
-                self._wrap(
-                    text, document_id, page_number, heading, "by_spans", bbox=bbox
-                )
-            )
-            current_spans, current_text_parts, current_tokens = [], [], 0
+            bbox = self._union_bbox(cur_spans, page_number)
+            chunks.append(self._wrap(text, document_id, page_number, heading, "by_spans", bbox=bbox))
+            cur_spans, cur_texts, cur_tokens = [], [], 0
 
-        for span in spans:
-            if not isinstance(span, dict):
+        for s in spans:
+            if not isinstance(s, dict):
                 continue
-                
-            text = (span.get("text") or "").strip()
-            if not text:
+            txt = (s.get("text") or "").strip()
+            if not txt:
                 continue
-                
-            token_count = _count_tokens(text)
-      
-            if token_count > self.cfg.rec_chunk_size:
-                flush_chunk()
-                bbox = span.get("bbox")
-                chunks.append(
-                    self._wrap(text, document_id, page_number, heading, "by_spans", bbox=bbox)
-                )
-                continue
-            
-            if current_tokens + token_count > self.cfg.rec_chunk_size:
-                flush_chunk()
-            
-            current_spans.append(span)
-            current_text_parts.append(text)
-            current_tokens += token_count
+            t = _count_tokens(txt)
 
-        flush_chunk()
+            if t > limit:
+                flush()
+                chunks.append(self._wrap(txt, document_id, page_number, heading, "by_spans", bbox=s.get("bbox")))
+                continue
+
+            if cur_tokens + t > limit:
+                flush()
+
+            cur_spans.append(s)
+            cur_texts.append(txt)
+            cur_tokens += t
+
+        flush()
         return chunks
 
     # =============================================================================
