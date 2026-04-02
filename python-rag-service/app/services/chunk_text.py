@@ -395,3 +395,4 @@ class TextSplitter:
             return all_chunks[:self.cfg.max_chunks]
             
         return all_chunks
+        

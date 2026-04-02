@@ -1,8 +1,10 @@
 import hashlib
 import logging
 import time
+import asyncio
 from dataclasses import dataclass
 from typing import Union, List, Dict, Optional, Any
+from concurrent.futures import ProcessPoolExecutor
 
 from anyio import to_thread
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -24,13 +26,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProcessorConfig:
     """
-    Controls ingestion behavior:
+    Controls PDF ingestion behavior:
     - chunk_mode: which chunking strategy to use ("semantic" | "legal" | "fast")
     - min_chars_per_chunk: discard ultra-short chunks (noise)
     - dedupe: remove exact duplicate chunks by normalized content
     """
     chunk_mode: str = "semantic"
-    min_chars_per_chunk: int = 5
+    min_chars_per_chunk: int = 50
     dedupe: bool = True
 
 
@@ -48,7 +50,7 @@ def _normalize_text(s: str) -> str:
 
 class SmartDocumentProcessor:
     """
-    PDF/text ingestor:
+    PDF ingestor:
       - PDF extraction (with OCR fallback)
       - smart chunking via TextSplitter (legal / semantic / fast[=recursive])
       - filter out ultra-short chunks and optional dedupe
@@ -61,7 +63,8 @@ class SmartDocumentProcessor:
         split_cfg: SplitConfig = SplitConfig(),
     ):
         self.cfg = cfg
-        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    
         self.embeddings = OpenAIEmbeddings(model=self.embedding_model)
         self.vector_store = VectorStore(
             embedding_model=self.embedding_model,
@@ -82,19 +85,20 @@ class SmartDocumentProcessor:
                 cfg=split_cfg,
                 embeddings=self.embeddings,
             )
-        else:  # "fast" -> recursive fallback via TextSplitter (semantic_mode=False)
+        else: 
             self.splitter = TextSplitter(
                 legal_mode=False,
                 semantic_mode=False,
                 cfg=split_cfg,
             )
 
-        self.pdf = PDFProcessor(
+        self.pdf_processor = PDFProcessor(
             cfg=PDFProcessorConfig(
                 use_ocr_fallback=True,
                 keep_full_page_text=True,
                 skip_empty_pages=True,
                 trim_whitespace=True,
+                keep_spans=True,
             ),
             ocr_fn=extract_text_with_ocr,
         )
@@ -105,32 +109,30 @@ class SmartDocumentProcessor:
 
     async def ingest(
         self,
-        source: Union[str, bytes, List[str]],
+        source: Union[str, bytes],
         doc_id: str,
         **kwargs
     ) -> Dict[str, Any]:
         """
-        Ingest a source into FAISS.
+        Ingest a PDF into FAISS.
 
         Args:
-            source: str/bytes -> PDF path/bytes; list[str] -> pre-supplied texts
+            source: PDF file path or bytes
             doc_id: stable document identifier
             filename (kwarg): optional filename metadata
-            metadata (kwarg): optional base metadata for text ingestion
 
         Returns:
-            Dict[str, Any]: status + counters + timings (or {"status":"error", ...})
+            Dict[str, Any]: status + counters + timings
         """
         try:
-            logger.info("Ingest start doc_id=%s source_type=%s", doc_id, type(source).__name__)
-            if isinstance(source, (str, bytes, bytearray)):
+            logger.info("PDF ingest start doc_id=%s source_type=%s", doc_id, type(source).__name__)
+
+            if isinstance(source, (str, bytes)):
                 return await self._ingest_pdf(source, doc_id, filename=kwargs.get("filename"))
-            elif isinstance(source, list):
-                return await self._ingest_texts(source, doc_id, base_metadata=kwargs.get("metadata"))
             else:
                 return {"status": "error", "doc_id": doc_id, "reason": "unsupported_source_type"}
         except Exception as e:
-            logger.exception("Ingest failed doc_id=%s", doc_id)
+            logger.exception("PDF ingest failed doc_id=%s", doc_id)
             return {"status": "error", "doc_id": doc_id, "error": str(e)}
 
     # --------------------------------------------------------------
@@ -138,33 +140,51 @@ class SmartDocumentProcessor:
     # --------------------------------------------------------------
 
     async def _ingest_pdf(self, pdf_source: Union[str, bytes], doc_id: str, filename: Optional[str]) -> Dict[str, Any]:
-        """Extract pages from PDF, chunk them, and write a fresh FAISS index."""
         t0 = time.perf_counter()
-        extracted = await to_thread.run_sync(self.pdf.extract_pdf_pages, pdf_source, doc_id)
+        extracted = await to_thread.run_sync(self.pdf_processor.extract_pdf_pages, pdf_source, doc_id)
         t_extract = time.perf_counter() - t0
 
         if "error" in extracted:
             return {"status": "error", "doc_id": doc_id, "error": extracted["error"]}
 
         pages = extracted.get("pages", []) or []
+        if not pages:
+            return {"status": "error", "doc_id": doc_id, "reason": "no_pages_extracted"}
+
+        split_docs: List[Document] = []
+        try:
+            has_spans = any(p.get("spans") for p in pages)
+            if has_spans and hasattr(self.splitter, "split_pdf_pages_with_spans"):
+                split_docs = self.splitter.split_pdf_pages_with_spans(pages, document_id=doc_id)
+            else:
+                for p in pages:
+                    txt = p.get("content") or p.get("text") or ""
+                    if not txt.strip():
+                        continue
+                    split_docs.extend(
+                        self.splitter.split_text(text=txt, document_id=doc_id, page_number=p.get("pageNumber"))
+                    )
+        except Exception:
+            logger.exception("Span-aware split failed; falling back to text-only.")
+
+            split_docs = []
+            for p in pages:
+                txt = p.get("content") or p.get("text") or ""
+                if not txt.strip():
+                    continue
+                split_docs.extend(
+                    self.splitter.split_text(text=txt, document_id=doc_id, page_number=p.get("pageNumber"))
+                )
+
         docs: List[Document] = []
-
-        for p in pages:
-            text = p.get("content") or ""
-            if not text.strip():
-                continue
-
-            page_no = p.get("pageNumber")
-
-            split_docs = self.splitter.split_text(text=text, document_id=doc_id, page_number=page_no)
-            for d in split_docs:
-                md = dict(d.metadata or {})
+        for d in split_docs:
+            md = dict(d.metadata or {})
+            if filename:
                 md.setdefault("filename", filename)
-            
-                if "chunkId" not in md:
-    
-                    raise ValueError("Splitter did not assign chunkId.")
-                docs.append(Document(page_content=d.page_content, metadata=md))
+            if "chunkId" not in md:
+                preview = d.page_content[:50] if d.page_content else ""
+                md["chunkId"] = f"fallback_{hash(preview) % 10000:04d}"
+            docs.append(Document(page_content=d.page_content, metadata=md))
 
         docs = self._filter_min_len(docs, self.cfg.min_chars_per_chunk)
         docs_unique = self._dedupe(docs) if self.cfg.dedupe else docs
@@ -172,7 +192,7 @@ class SmartDocumentProcessor:
             return {"status": "error", "doc_id": doc_id, "reason": "no_usable_chunks_after_split"}
 
         t1 = time.perf_counter()
-        await to_thread.run_sync(self._save_all, docs_unique)
+        await self._save_to_vector_store(docs_unique)
         t_store = time.perf_counter() - t1
 
         result = {
@@ -183,9 +203,8 @@ class SmartDocumentProcessor:
             "chunk_count": len(docs_unique),
             "stored": len(docs_unique),
             "timings": {
-                "extract_s": round(t_extract, 3),
-                "store_s": round(t_store, 3),
-            },
+                "extract_s": round(t_extract, 3), 
+                "store_s": round(t_store, 3)},
         }
         logger.info(
             "Ingest done doc_id=%s pages=%s chunks=%s stored=%s timings=%s",
@@ -193,87 +212,6 @@ class SmartDocumentProcessor:
         )
         return result
 
-    async def _ingest_texts(
-        self,
-        chunks: List[str],
-        doc_id: str,
-        base_metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Chunk and index pre-supplied plain texts (no PDF)."""
-        base_metadata = base_metadata or {}
-        docs: List[Document] = []
-
-        t0 = time.perf_counter()
-        non_empty_inputs = 0
-        produced_before_filter = 0
-
-        for idx, ch in enumerate(chunks, start=1):
-            content = (ch or "").strip()
-            if not content:
-                continue
-            non_empty_inputs += 1
-
-            split_docs = self.splitter.split_text(text=content, document_id=doc_id, page_number=None)
-            produced_before_filter += len(split_docs)
-            for d in split_docs:
-                md = dict(d.metadata or {})
-                md.update(base_metadata)
-                if "chunkId" not in md:
-                    raise ValueError("Splitter did not assign chunkId.")
-                docs.append(Document(page_content=d.page_content, metadata=md))
-
-        t_split = time.perf_counter() - t0
-
-        before_filter = len(docs)
-        docs = self._filter_min_len(docs, self.cfg.min_chars_per_chunk)
-        filtered_out = before_filter - len(docs)
-
-        before_dedupe = len(docs)
-        docs_unique = self._dedupe(docs) if self.cfg.dedupe else docs
-        deduped_out = before_dedupe - len(docs_unique)
-
-        if not docs_unique:
-            return {
-                "status": "error",
-                "doc_id": doc_id,
-                "reason": "no_usable_chunks",
-                "counters": {
-                    "inputs_seen": len(chunks),
-                    "inputs_non_empty": non_empty_inputs,
-                    "chunks_before_filter": produced_before_filter,
-                    "filtered_out": filtered_out,
-                    "deduped_out": deduped_out,
-                }
-            }
-
-        t1 = time.perf_counter()
-        await to_thread.run_sync(self._save_all, docs_unique)
-        t_store = time.perf_counter() - t1
-
-        result = {
-            "status": "success",
-            "doc_id": doc_id,
-            "chunk_count": len(docs_unique),
-            "stored": len(docs_unique),
-            "counters": {
-                "inputs_seen": len(chunks),
-                "inputs_non_empty": non_empty_inputs,
-                "chunks_before_filter": produced_before_filter,
-                "filtered_out": filtered_out,
-                "deduped_out": deduped_out,
-            },
-            "timings": {
-            "split_s": round(t_split, 3),
-            "store_s": round(t_store, 3),
-            },
-        }
-        logger.info(
-            "Ingest(texts) done doc_id=%s non_empty=%s chunks=%s filtered=%s deduped=%s stored=%s timings=%s",
-            doc_id, non_empty_inputs, produced_before_filter, filtered_out, deduped_out,
-            result["stored"], result["timings"]
-        )
-        return result
-        
     # --------------------------------------------------------------
     # Utilities
     # --------------------------------------------------------------
@@ -294,24 +232,28 @@ class SmartDocumentProcessor:
         seen: set[str] = set()
         unique: List[Document] = []
         for d in docs:
-            key = hashlib.sha1(_normalize_text(d.page_content).encode("utf-8")).hexdigest()
+            key = hashlib.sha256(_normalize_text(d.page_content).encode("utf-8")).hexdigest()
             if key in seen:
                 continue
             seen.add(key)
             unique.append(d)
         return unique
 
+    async def _save_to_vector_store(self, docs: List[Document]) -> None:
+        """Save documents using process pool for CPU-intensive FAISS work."""
+        await asyncio.to_thread(self._save_with_retry, docs)
+
     @retry(
-        retry=retry_if_exception_type(Exception),
-        wait=wait_exponential(multiplier=0.8, min=1, max=8),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError, RuntimeError)),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
         stop=stop_after_attempt(3),
         reraise=True,
     )
-
-    def _save_all(self, docs: List[Document]) -> None:
+    
+    def _save_with_retry(self, docs: List[Document]) -> None:
         """
         Synchronous write of all chunks in one call.
         VectorStore will rebuild (delete + recreate) the per-document FAISS index.
         """
         self.vector_store.save_to_faiss(docs=docs)
-
+        

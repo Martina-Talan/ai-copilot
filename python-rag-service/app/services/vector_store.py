@@ -3,11 +3,14 @@ import shutil
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
+
+from dotenv import load_dotenv
+load_dotenv() 
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +32,13 @@ def _faiss_files_present(path: str) -> bool:
     p = Path(path)
     return (p / "index.faiss").is_file() and (p / "index.pkl").is_file()
 
+def _ensure_same_doc_id(docs: List[Document]) -> str:
+    ids = { (d.metadata or {}).get("documentId") for d in docs }
+    ids.discard(None)
+    if len(ids) != 1:
+        raise ValueError(f"All docs must share the same documentId, got: {ids}")
+    return ids.pop()
+
 # ===============================
 # Store
 # ===============================
@@ -49,11 +59,15 @@ class VectorStore:
         cfg: VectorStoreConfig = VectorStoreConfig(),
     ):
         self.cfg = cfg
-        self.embeddings = embeddings or OpenAIEmbeddings(
-            model=embedding_model or os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-        )
-        model_name = embedding_model or getattr(self.embeddings, "model", "openai_embeddings")
-        self.model_base_dir = Path(self.cfg.index_base) / embedding_model.replace("/", "_")
+        if embeddings is not None:
+            self.embeddings = embeddings
+            model_name = getattr(embeddings, "model", None) or os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+        else:
+            model_name = (embedding_model or os.getenv("EMBEDDING_MODEL") or "text-embedding-3-large").strip()
+            self.embeddings = OpenAIEmbeddings(model=model_name)
+
+        self.embedding_model = model_name
+        self.model_base_dir = Path(self.cfg.index_base) / self.embedding_model.replace("/", "_")
         self.model_base_dir.mkdir(parents=True, exist_ok=True)
 
     def _doc_dir(self, doc_id: str, index_dir: Optional[str] = None) -> Path:
@@ -79,7 +93,7 @@ class VectorStore:
             log.info("save_to_faiss: empty docs; nothing to save.")
             return
 
-        doc_id = (docs[0].metadata or {}).get("documentId")
+        doc_id = _ensure_same_doc_id(docs)
         if not doc_id:
             raise ValueError("First document is missing metadata['documentId'].")
 
@@ -87,7 +101,7 @@ class VectorStore:
         if target_dir.exists():
             shutil.rmtree(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
-
+        
         store = FAISS.from_documents(docs, self.embeddings)
         store.save_local(str(target_dir))
         log.info("Created fresh FAISS index with %d chunks at %s", len(docs), str(target_dir))
@@ -95,7 +109,7 @@ class VectorStore:
     # ---------------------------
     # Load
     # ---------------------------
-
+    
     def load_faiss_store(
         self,
         document_id: str,
@@ -144,12 +158,19 @@ class VectorStore:
             log.warning("safe_load_faiss_store: %s", e)
             return None
 
-    def similarity_search(
+    def similarity_search_with_score(
         self,
         document_id: str,
         query: str,
         index_dir: Optional[str] = None,
         k: Optional[int] = None,
-    ) -> List[Document]:
-        retr = self.load_faiss_store(document_id, index_dir=index_dir, as_retriever=True, k=k)
-        return retr.get_relevant_documents(query)
+    ) -> List[Tuple[Document, float]]:
+        """
+        Perform similarity search with scores.
+        Returns list of (document, score) tuples.
+        """
+        store = self.load_faiss_store(document_id, index_dir=index_dir, as_retriever=False)
+        k_eff = int(k or self.cfg.k_default)
+        return store.similarity_search_with_score(query, k=k_eff)
+
+    

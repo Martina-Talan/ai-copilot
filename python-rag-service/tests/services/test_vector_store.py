@@ -5,12 +5,11 @@ from pathlib import Path
 import pytest
 from langchain_core.documents import Document
 
-# ---------- Fakes (no external dependencies) ----------
+# ---------- Fakes  ----------
 
 class FakeEmbeddings:
     def __init__(self, *a, **k): pass
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # Not actually used by FakeFAISS, kept for interface compatibility
         return [[len(t)] for t in texts]
     def embed_query(self, text: str) -> List[float]:
         return [len(text)]
@@ -21,7 +20,7 @@ class _DocStore:
 
 class FakeFAISS:
     """Minimal imitation of LangChain's FAISS store."""
-    _REGISTRY = {}  # path(str) -> instance
+    _REGISTRY = {}
 
     def __init__(self, docs: List[Document] = None):
         self.docstore = _DocStore()
@@ -31,7 +30,6 @@ class FakeFAISS:
 
     @classmethod
     def from_documents(cls, docs, embeddings, **kwargs):
-        # Build a brand-new "index" from documents
         return cls(docs)
 
     @classmethod
@@ -48,7 +46,6 @@ class FakeFAISS:
             self.docstore._dict[key] = d
 
     def save_local(self, path: str):
-        # Remember instance and create stub files expected by the loader
         FakeFAISS._REGISTRY[path] = self
         os.makedirs(path, exist_ok=True)
         Path(path, "index.faiss").write_bytes(b"fake-index")
@@ -60,7 +57,6 @@ class FakeFAISS:
         class _R:
             def __init__(self, p, k): self.p, self.k = p, k
             def get_relevant_documents(self, query):
-                # Return first k docs (good enough for testing)
                 return self.p._docs[: self.k]
         return _R(parent, k)
 
@@ -96,7 +92,6 @@ def test_save_creates_index_dir(tmp_path):
     docs = make_docs(3, doc_id="A")
     vs.save_to_faiss(docs)
 
-    # Directory: <index_base>/<model_sanitized>/doc_<id>
     target = tmp_path / "faiss_root" / "test-emb" / "doc_A"
     assert target.is_dir()
     assert (target / "index.faiss").exists()
@@ -135,6 +130,45 @@ def test_similarity_search_returns_documents(tmp_path):
 
     vs.save_to_faiss(make_docs(4, "C"))
 
-    res = vs.similarity_search("C", "query", k=3)
+    retr = vs.load_faiss_store("C", as_retriever=True, k=3)
+    res = retr.get_relevant_documents("query")
     assert len(res) == 3
     assert all(isinstance(d, Document) for d in res)
+
+def test_ensure_same_doc_id_raises_on_mixed():
+    from app.services.vector_store import _ensure_same_doc_id
+    from langchain_core.documents import Document
+
+    a = Document(page_content="a", metadata={"documentId": "X"})
+    b = Document(page_content="b", metadata={"documentId": "Y"})
+
+    import pytest
+    with pytest.raises(ValueError):
+        _ensure_same_doc_id([a, b])
+
+
+def test_save_empty_docs_is_noop(tmp_path):
+    from app.services.vector_store import VectorStore, VectorStoreConfig
+    vs = VectorStore("emb", cfg=VectorStoreConfig(index_base=str(tmp_path)))
+    vs.save_to_faiss([]) 
+
+def test_load_missing_raises(tmp_path):
+    from app.services.vector_store import VectorStore, VectorStoreConfig
+    vs = VectorStore("emb", cfg=VectorStoreConfig(index_base=str(tmp_path)))
+    with pytest.raises(FileNotFoundError):
+        vs.load_faiss_store("NOPE", as_retriever=False)
+
+def test_k_default_fallback(tmp_path):
+    from app.services.vector_store import VectorStore, VectorStoreConfig
+    cfg = VectorStoreConfig(index_base=str(tmp_path)); cfg.k_default = 2
+    vs = VectorStore("emb", cfg=cfg)
+    vs.save_to_faiss(make_docs(5, "D"))
+    retr = vs.load_faiss_store("D", as_retriever=True)  
+    assert len(retr.get_relevant_documents("q")) == 2
+
+def test_index_dir_override(tmp_path):
+    from app.services.vector_store import VectorStore, VectorStoreConfig
+    vs = VectorStore("emb", cfg=VectorStoreConfig(index_base=str(tmp_path/"base")))
+    custom = str(tmp_path/"custom")
+    vs.save_to_faiss(make_docs(1, "Z"), index_dir=custom)
+    assert Path(custom, "doc_Z", "index.faiss").exists()
