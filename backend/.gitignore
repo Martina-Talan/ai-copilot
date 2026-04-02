@@ -1,6 +1,14 @@
-echo "node_modules
-dist
+# Node
+node_modules/
+dist/
+
+# Env
 .env
-.vscode
+
+# Editor
+.vscode/
 .DS_Store
-" > backend/.gitignore
+
+# Uploads
+uploads/
+*.pdf

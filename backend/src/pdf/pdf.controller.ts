@@ -11,7 +11,7 @@ import { ApiResponse } from '../types';
 @Controller()
 export class PdfController {
   @Post('/view-pdf')
-  async viewPdf(@Body() body: { path: string }) {
+  async viewPdf(@Body() body: { path: string; id: string }) {
     if (!body.path?.trim()) {
       throw new HttpException('Missing or empty path', HttpStatus.BAD_REQUEST);
     }

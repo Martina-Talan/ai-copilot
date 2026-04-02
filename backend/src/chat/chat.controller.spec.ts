@@ -27,7 +27,7 @@ describe('ChatController', () => {
 
   it('should return the AI answer from the service', async () => {
     const inputDto: ChatDto = {
-      documentId: 1,
+      documentId: '1',
       question: 'What is AI?',
     };
 
@@ -40,7 +40,7 @@ describe('ChatController', () => {
 
     const result = await controller.askQuestion(inputDto);
 
-    expect(service.askQuestion).toHaveBeenCalledWith(1, 'What is AI?');
+    expect(service.askQuestion).toHaveBeenCalledWith('1', 'What is AI?');
     expect(result).toEqual(mockApiResponse);
   });
 });

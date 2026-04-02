@@ -5,8 +5,8 @@ import { Type } from 'class-transformer';
 export class ChatDto {
   @ApiProperty()
   @IsNumber()
-  @Type(() => Number)
-  documentId: number;
+  @Type(() => String)
+  documentId: string;
 
   @ApiProperty()
   @IsString()

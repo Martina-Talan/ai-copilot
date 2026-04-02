@@ -11,7 +11,10 @@ export class Chat {
   id: number;
 
   @Column()
-  documentId: number;
+  documentId: string;
+
+  @Column()
+  userId: string;
 
   @Column()
   role: 'user' | 'assistant';
