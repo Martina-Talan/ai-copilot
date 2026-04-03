@@ -89,7 +89,14 @@
       <i class="bi bi-file-earmark fs-4 text-custom"></i>
 
     <div>
-      <p class="mb-1 file-name">{{ doc.filename }}</p>
+      <p class="mb-1 file-name">
+        {{ doc.filename }} 
+        <span
+          v-if="doc.chunkCount === 0"
+          class="badge rounded-pill text-bg-warning ms-2"
+          title="This PDF is a scan (no text)"
+          >no text</span>
+      </p>
     </div>
   </div>
 
@@ -110,13 +117,17 @@
     <div class="d-flex justify-content-end align-items-center gap-2">
       <button
         class="btn btn-ask btn-sm"
-        @click="$emit('ask', { id: doc.id, path: doc.path })"
-      >
-        Ask
+        :disabled="!doc.doc_id && !doc.id"           
+        @click="$emit('ask', { 
+        documentId: (doc.doc_id ?? String(doc.id)), 
+          path: doc.path 
+        })"
+        >
+          Ask
       </button>
       <button
         class="btn btn-m text-custom"
-        @click="handleDelete(doc.id)"
+        @click="handleDelete(doc.id, doc.doc_id)"
       >
         <i class="bi bi-trash"></i>
       </button>
@@ -160,31 +171,47 @@ import { useChatStore } from '../store/chat'
 
 const chatStore = useChatStore()
 
-let deleteId = ref<number | null>(null)
+type DocumentItem = {
+  id: number           
+  doc_id?: string       
+  filename: string
+  path: string
+  createdAt?: string
+  uploadedAt?: string
+  chunkCount?: number  
+}
 
-function handleDelete(id: number) {
-  deleteId.value = id
+const deleteDbId = ref<number | null>(null)
+const deleteDocId = ref<string | null>(null)
+
+function handleDelete(dbId: number, docId: string) {
+  deleteDbId.value = dbId
+  deleteDocId.value = docId
   const modalEl = document.getElementById('confirmDeleteModal')
   const modal = new Modal(modalEl!)
   modal.show()
 }
 
 async function confirmDelete() {
-  if (deleteId.value !== null) {
+  if (deleteDbId.value !== null) {
     try {
-      await deleteDocument(deleteId.value)
-      chatStore.clearHistory(deleteId.value)
+      // 1) obriši zapis u bazi po DB id-u (number)
+      await deleteDocument(deleteDbId.value)
+      // 2) očisti chat povijest po doc_id (string) + userId
+      if (deleteDocId.value) {
+        chatStore.clearHistory(deleteDocId.value, userStore.userId)
+      }
       await fetchDocuments()
     } catch (err) {
       console.error('Error:', err)
     }
   }
-  deleteId.value = null
+  // reset
+  deleteDbId.value = null
+  deleteDocId.value = null
   const modalEl = document.getElementById('confirmDeleteModal')
-  const modal = Modal.getInstance(modalEl!)
-  modal?.hide()
+  Modal.getInstance(modalEl!)?.hide()
 }
-
 
 const emit = defineEmits(['ask'])
 const documents = ref<any[]>([])
@@ -380,5 +407,14 @@ function formatDate(dateStr: string) {
     width: 100%;
   }
 
+}
+.aiva-logo {
+  height: 3rem;
+  filter: invert(61%) sepia(39%) saturate(532%) hue-rotate(339deg) brightness(90%) contrast(85%);
+}
+
+.aiva-accent {
+  color: rgb(133, 102, 82);
+  font-size: 2rem;
 }
 </style>

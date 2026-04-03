@@ -33,7 +33,7 @@
 
         <!-- Center Mockup -->
         <div class="col-xl-6 col-lg-4 col-md-12 text-center order-first order-lg-0 px-lg-5">
-          <img src="/img/mobile.png" class="img-fluid mockup" alt="Document AI interface">
+          <img src="/img/screenshot-mobil-portrait.png" class="img-fluid mockup" alt="Document AI interface">
         </div>
 
         <!-- Right Features Column -->

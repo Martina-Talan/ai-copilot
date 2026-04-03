@@ -11,13 +11,13 @@
     <div id="fileCarousel" class="carousel slide carousel-dark" data-bs-ride="carousel">
       <div class="carousel-inner">
         <div class="carousel-item active">
-          <img src="/img/screenshot.png" class="d-block w-100 rounded shadow" alt="Slide 1">
+          <img src="/img/screenshot-1.png" class="d-block w-100 rounded shadow" alt="Slide 1">
         </div>
         <div class="carousel-item">
-          <img src="/img/screenshot.png" class="d-block w-100 rounded shadow" alt="Slide 2">
+          <img src="/img/screenshot-2.png" class="d-block w-100 rounded shadow" alt="Slide 2">
         </div>
         <div class="carousel-item">
-          <img src="/img/screenshot.png" class="d-block w-100 rounded shadow" alt="Slide 3">
+          <img src="/img/screenshot-3.png" class="d-block w-100 rounded shadow" alt="Slide 3">
         </div>
       </div>
     </div>

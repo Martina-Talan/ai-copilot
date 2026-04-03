@@ -4,44 +4,27 @@ export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   timestamp: string
+  sources?: { pageNumber: number }[]
 }
 
 export const useChatStore = defineStore('chat', {
-  state: () => ({
-    historyByDoc: {} as Record<number, ChatMessage[]>
-  }),
- 
+  state: () => ({ historyByKey: {} as Record<string, ChatMessage[]> }),
   getters: {
-    getHistory: (state) => {
-      return (documentId: number): ChatMessage[] => {
-        return state.historyByDoc[documentId] || []
-      }
-    }
+    getHistory: (state) => (documentId: string, userId?: string|number) =>
+      state.historyByKey[`${userId ?? 'anon'}::${documentId}`] || [],
   },
-
   actions: {
-    addMessage(documentId: number, role: 'user' | 'assistant', content: string) {
-      const entry: ChatMessage = {
-        role,
-        content,
-        timestamp: new Date().toISOString()
-      }
-
-      if (!this.historyByDoc[documentId]) {
-        this.historyByDoc[documentId] = []
-      }
-
-      this.historyByDoc[documentId].push(entry)
+    replaceHistory(documentId: string, userId: string|number|undefined, msgs: ChatMessage[]) {
+      this.historyByKey[`${userId ?? 'anon'}::${documentId}`] = msgs.slice()
     },
-
-    clearHistory(documentId: number) {
-      this.historyByDoc[documentId] = []
+    addMessage(documentId: string, role: 'user'|'assistant', content: string, sources?: any[], userId?: string|number) {
+      const k = `${userId ?? 'anon'}::${documentId}`
+      ;(this.historyByKey[k] ||= []).push({ role, content, timestamp: new Date().toISOString(), sources })
     },
-    updateLastAssistantMessage(documentId: number, token: string, index: number) {
-      if (this.historyByDoc[documentId] && this.historyByDoc[documentId][index]) {
-        this.historyByDoc[documentId][index].content += token
-      }
-    }
-    
-  }
+    clearHistory(documentId: string, userId?: string|number) {
+      delete this.historyByKey[`${userId ?? 'anon'}::${documentId}`]
+    },
+    resetAll() { this.historyByKey = {} },
+  },
+  persist: false,
 })

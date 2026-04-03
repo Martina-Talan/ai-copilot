@@ -41,30 +41,6 @@
 
     <!-- CTA box below FAQ -->
 <div class="contact-cta text-center mt-5 py-5 px-4 rounded">
-  <div class="d-flex justify-content-center mb-3">
-    <img
-      src="/img/ai-1.jpg"
-      alt="User 1"
-      class="rounded-circle me-1"
-      width="50"
-      height="50"
-    />
-    <img
-      src="/img/ai-2.jpg"
-      alt="User 2"
-      class="rounded-circle me-1"
-    width="50"
-      height="50"
-    />
-    <img
-      src="/img/ai-3.jpg"
-      alt="User 3"
-      class="rounded-circle"
-      width="50"
-      height="50"
-    />
-  </div>
-
   <h3 class="h3 fw-semibold mb-2">Still have questions?</h3>
   <p class="h4 text-muted mb-4">Can’t find the answer you’re looking for? Just chat with our friendly team.</p>
   <button class="btn btn-brown">Get in touch</button>
