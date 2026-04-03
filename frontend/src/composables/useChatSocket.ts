@@ -1,7 +1,6 @@
 import { ref, nextTick } from 'vue'
 import type { ChatAnswer, Coordinates, SourceItem } from '../types/chat-types'
 import {
-  looksLikeNoContext,
   findParagraphBoxesAnyPage,
   findBestCoords,
 } from '../utils/pdf-highlight'
@@ -45,22 +44,22 @@ export function useChatSocket(options: {
 
   const parseSources = (rawSources: any[]): SourceItem[] => {
     return (rawSources || [])
-      .map((s): SourceItem => ({
-        filename: s.filename,
-        pageNumber: s.pageNumber ?? s.page ?? 1,
-        textMatch: s.textMatch,
-        confidence: s.confidence ?? 0,
-        coordinates: s.coordinates
+      .map((source): SourceItem => ({
+        filename: source.filename,
+        pageNumber: source.pageNumber ?? source.page ?? 1,
+        textMatch: source.textMatch,
+        confidence: source.confidence ?? 0,
+        coordinates: source.coordinates
           ? {
-              x: s.coordinates.x,
-              y: s.coordinates.y,
-              width: s.coordinates.width,
-              height: s.coordinates.height,
-              page: s.coordinates.page ?? (s.pageNumber ?? 1),
-              fromPdfSpace: s.coordinates.fromPdfSpace ?? true,
-              viewportScale: s.coordinates.viewportScale,
-              confidence: s.coordinates.confidence,
-              matchedText: s.coordinates.matchedText,
+              x: source.coordinates.x,
+              y: source.coordinates.y,
+              width: source.coordinates.width,
+              height: source.coordinates.height,
+              page: source.coordinates.page ?? (source.pageNumber ?? 1),
+              fromPdfSpace: source.coordinates.fromPdfSpace ?? true,
+              viewportScale: source.coordinates.viewportScale,
+              confidence: source.coordinates.confidence,
+              matchedText: source.coordinates.matchedText,
             }
           : null,
       }))
@@ -70,17 +69,24 @@ export function useChatSocket(options: {
   const handleSourcesMessage = async (data: any) => {
     sources.value = parseSources(data.sources || [])
 
-    const firstWithCoords = sources.value.find(s => s.coordinates)
-    if (firstWithCoords?.coordinates) {
-      await options.renderPage(firstWithCoords.coordinates.page, firstWithCoords.coordinates)
-      options.scrollToPage(firstWithCoords.coordinates.page)
+    const firstSourceWithCoords = sources.value.find(source => source.coordinates)
+    if (firstSourceWithCoords?.coordinates) {
+      await options.renderPage(
+        firstSourceWithCoords.coordinates.page,
+        firstSourceWithCoords.coordinates
+      )
+      options.scrollToPage(firstSourceWithCoords.coordinates.page)
     }
   }
 
   const handleAnswerMessage = async (data: any) => {
-    if (!answer.value) answer.value = { contextAnswer: '', additionalInfo: '' }
+    if (!answer.value) {
+      answer.value = { contextAnswer: '', additionalInfo: '' }
+    }
+
     streamedAnswer += data.token
     answer.value.contextAnswer = streamedAnswer
+
     await nextTick()
     options.scrollToBottom()
   }
@@ -99,94 +105,106 @@ export function useChatSocket(options: {
             fromPdfSpace: true,
           }
         : null
-    } catch (e) {
-      console.warn('Failed parsing source_references:', e)
+    } catch (err) {
+      console.warn('Failed parsing source_references:', err)
     }
   }
 
   const resolveFinalHighlight = async (finalText: string) => {
     const pdfInstance = options.getPdfInstance()
-    const noCtx = looksLikeNoContext(finalText)
+
+    if (!pdfInstance || !finalText.trim()) {
+      return {
+        chosen: null as Coordinates | null,
+        paraBoxes: null as Coordinates[] | null,
+      }
+    }
 
     let chosen: Coordinates | null = null
     let paraBoxes: Coordinates[] | null = null
 
-    if (!noCtx) {
-      const longish = finalText.length > 180 || /[.!?]\s+\p{L}/u.test(finalText)
+    const isLongAnswer = finalText.length > 180 || /[.!?]\s+\p{L}/u.test(finalText)
 
-      if (longish) {
-        const weighted = [...sources.value]
-          .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
-          .map(s => s.pageNumber)
+    if (isLongAnswer) {
+      const preferredPages = [...sources.value]
+        .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+        .map(source => source.pageNumber)
 
-        paraBoxes = await findParagraphBoxesAnyPage(pdfInstance, finalText, weighted)
+      paraBoxes = await findParagraphBoxesAnyPage(pdfInstance, finalText, preferredPages)
+    }
+
+    if (!paraBoxes?.length) {
+      const sourceWithCoordinates = sources.value.find(source => source.coordinates)
+      if (sourceWithCoordinates?.coordinates) {
+        chosen = sourceWithCoordinates.coordinates
       }
 
-      if (!paraBoxes?.length) {
-        const srcWithBox = sources.value.find(s => s.coordinates)
-        if (srcWithBox?.coordinates) chosen = srcWithBox.coordinates
-
-        if (!chosen && anchorPhrases.value.length) {
-          for (const phrase of anchorPhrases.value) {
-            const result = await findBestCoords(pdfInstance, phrase, sources.value)
-            if (result) {
-              chosen = result
-              break
-            }
+      if (!chosen && anchorPhrases.value.length) {
+        for (const phrase of anchorPhrases.value) {
+          const result = await findBestCoords(pdfInstance, phrase, sources.value)
+          if (result) {
+            chosen = result
+            break
           }
         }
+      }
 
-        if (!chosen && finalText) {
-          chosen = await findBestCoords(pdfInstance, finalText, sources.value)
+      if (!chosen && finalText) {
+        chosen = await findBestCoords(pdfInstance, finalText, sources.value)
+      }
 
-          if (!chosen && sources.value[0]?.textMatch) {
-            chosen = await findBestCoords(pdfInstance, sources.value[0].textMatch!, sources.value)
-          }
-        }
+      if (!chosen && sources.value[0]?.textMatch) {
+        chosen = await findBestCoords(
+          pdfInstance,
+          sources.value[0].textMatch!,
+          sources.value
+        )
+      }
 
-        if (!chosen && primaryHighlight.value) {
-          chosen = primaryHighlight.value
-        }
+      if (!chosen && primaryHighlight.value) {
+        chosen = primaryHighlight.value
       }
     }
 
-    return { noCtx, chosen, paraBoxes }
+    return { chosen, paraBoxes }
   }
 
   const handleDoneMessage = async () => {
     const finalText = (streamedAnswer || fullAnswer.value || '').trim()
+
     await options.clearAllHighlights()
 
-    const { noCtx, chosen, paraBoxes } = await resolveFinalHighlight(finalText)
+    const { chosen, paraBoxes } = await resolveFinalHighlight(finalText)
 
-    if (!noCtx) {
-      if (paraBoxes?.length) {
-        await options.renderPage(paraBoxes[0].page, paraBoxes)
-        options.scrollToPage(paraBoxes[0].page)
-      } else if (chosen) {
-        await options.renderPage(chosen.page, chosen)
-        options.scrollToPage(chosen.page)
-      }
+    if (paraBoxes?.length) {
+      await options.renderPage(paraBoxes[0].page, paraBoxes)
+      options.scrollToPage(paraBoxes[0].page)
+    } else if (chosen) {
+      await options.renderPage(chosen.page, chosen)
+      options.scrollToPage(chosen.page)
     }
 
     const pageForChat =
       paraBoxes?.[0]?.page ??
       chosen?.page ??
-      (sources.value[0]?.pageNumber ?? null)
+      sources.value[0]?.pageNumber ??
+      null
 
-    const sourcesForChat = !noCtx && pageForChat ? [{ pageNumber: pageForChat }] : []
+    const sourcesForChat = pageForChat ? [{ pageNumber: pageForChat }] : []
+
     options.addAssistantMessage(finalText, sourcesForChat)
 
     loading.value = false
     isStreaming.value = false
     answer.value = null
     streamedAnswer = ''
+
     await nextTick()
     options.scrollToBottom()
   }
 
   const handleErrorMessage = (data: any) => {
-    error.value = data.message
+    error.value = data.message || 'Something went wrong.'
     loading.value = false
     isStreaming.value = false
   }
@@ -198,18 +216,23 @@ export function useChatSocket(options: {
 
     socket = new WebSocket(WS_URL)
 
-    socket.onopen = () => console.log('WebSocket connected')
+    socket.onopen = () => {
+      console.log('WebSocket connected')
+    }
 
-    socket.onerror = err => {
+    socket.onerror = (err) => {
       console.error('WebSocket error:', err)
       error.value = 'WebSocket connection failed'
       loading.value = false
       isStreaming.value = false
     }
 
-    socket.onmessage = async event => {
+    socket.onmessage = async (event) => {
       const data = JSON.parse(event.data)
-      if (data.reqId != null && data.reqId !== currentReqId) return
+
+      if (data.reqId != null && data.reqId !== currentReqId) {
+        return
+      }
 
       switch (data.type) {
         case 'sources':
@@ -244,7 +267,11 @@ export function useChatSocket(options: {
     await options.clearAllHighlights()
 
     const reqId = ++currentReqId
-    const payload = { question, documentId: options.documentId, reqId }
+    const payload = {
+      question,
+      documentId: options.documentId,
+      reqId,
+    }
 
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(payload))
@@ -252,6 +279,7 @@ export function useChatSocket(options: {
     }
 
     connectWebSocket()
+
     setTimeout(() => {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(payload))
