@@ -79,7 +79,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import api from '../axios'
+import api from '../lib/axios'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '../store/user'
 
