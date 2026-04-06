@@ -91,18 +91,12 @@ const userStore = useUserStore()
 
 const handleLogin = async () => {
   try {
-    const response = await api.post('/auth/login', {
+    const response = await axios.post('/auth/login', {
       email: email.value,
       password: password.value,
     })
 
     const token = response.data.access_token
-
-    if (!token) {
-      errorMessage.value = 'Login failed. No token received.'
-      return
-    }
-
     localStorage.setItem('token', token)
     userStore.setToken(token)
     router.push('/dashboard')
