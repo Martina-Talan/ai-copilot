@@ -1,11 +1,14 @@
 FROM node:20.11-alpine
 
 WORKDIR /app
+
 COPY package*.json ./
 RUN npm install --legacy-peer-deps
 
 COPY . .
+
 RUN npm run build
 
 EXPOSE 3000
-CMD ["node", "dist/main"]
+
+CMD ["node", "dist/main.js"]
