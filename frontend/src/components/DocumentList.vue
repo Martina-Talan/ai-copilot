@@ -1,37 +1,12 @@
 <template>
   <div class="container py-4">
-    <!-- Top bar -->
-    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 header-topbar">
-      <div class="d-flex align-items-center gap-2">
-        <img src="/img/ai-logo.svg" alt="Logo" class="aiva-logo" />
-        <span class="fw-bold aiva-accent">AIVA</span>
-      </div>
-
-      <!-- Search -->
-      <form @submit.prevent class="search-form flex-grow-1 mx-3">
-        <div class="input-group search-wrapper">
-          <span class="input-group-text bg-white border-end-0">
-            <i class="bi bi-search text-muted"></i>
-          </span>
-          <input
-            type="text"
-            class="form-control border-start-0 search-input"
-            placeholder="Search"
-          />
-        </div>
-      </form>
-
-      <!-- Right buttons -->
-      <div class="d-flex align-items-center gap-2">
-        <button class="btn btn-upgrade px-3 py-2">
-          <i class="bi bi-stars me-1"></i> Upgrade
-        </button>
-        <div class="btn btn-upgrade px-3 py-2 d-flex align-items-center gap-2">
-          <span class="fw-semibold user-email">{{ userName }}</span>
-          <i class="bi bi-chevron-down small"></i>
-        </div>
-      </div>
-    </div>
+    <ChatNavbar
+      :user-name="userName"
+      :show-search="true"
+      :show-share="false"
+      :show-upgrade="true"
+      :show-user="true"
+    />
 
     <h2 class="fw-bold mb-4 mt-5 fs-3 text-dark">All Files</h2>
 
@@ -168,18 +143,9 @@ import { deleteDocument, getAllDocuments, uploadDocument } from '../api/document
 import { useUserStore } from '../store/user'
 import { Modal } from 'bootstrap'
 import { useChatStore } from '../store/chat'
+import ChatNavbar from './AppNavbar.vue'
 
 const chatStore = useChatStore()
-
-type DocumentItem = {
-  id: number           
-  doc_id?: string       
-  filename: string
-  path: string
-  createdAt?: string
-  uploadedAt?: string
-  chunkCount?: number  
-}
 
 const deleteDbId = ref<number | null>(null)
 const deleteDocId = ref<string | null>(null)
@@ -195,9 +161,7 @@ function handleDelete(dbId: number, docId: string) {
 async function confirmDelete() {
   if (deleteDbId.value !== null) {
     try {
-      // 1) obriši zapis u bazi po DB id-u (number)
       await deleteDocument(deleteDbId.value)
-      // 2) očisti chat povijest po doc_id (string) + userId
       if (deleteDocId.value) {
         chatStore.clearHistory(deleteDocId.value, userStore.userId)
       }
@@ -206,7 +170,6 @@ async function confirmDelete() {
       console.error('Error:', err)
     }
   }
-  // reset
   deleteDbId.value = null
   deleteDocId.value = null
   const modalEl = document.getElementById('confirmDeleteModal')
@@ -261,14 +224,6 @@ function formatDate(dateStr: string) {
 </script>
 
 <style scoped>
-.text-custom {
-  color: rgb(133, 102, 82);
-}
-
-.text-custom:hover {
-  color: rgb(102, 82, 65);
-}
-
 .upload-box {
   border: 0.125rem dashed rgb(133, 102, 82);
   background-color: rgb(255, 255, 255);
@@ -291,43 +246,14 @@ function formatDate(dateStr: string) {
   font-size: 2rem;
 }
 
-.aiva-logo {
-  height: 3rem;
-  filter: invert(61%) sepia(39%) saturate(532%) hue-rotate(339deg) brightness(90%) contrast(85%);
-}
-
-.aiva-accent {
-  color: rgb(133, 102, 82);
-  font-size: 2rem;
-}
-
-.search-input {
-  padding: 0.6rem 1rem;
-  font-size: 1rem;
-  border-radius: 0 0.5rem 0.5rem 0;
-  border: 1px solid rgb(222, 226, 230);
-  background-color: rgb(255, 255, 255);
-  color: rgb(33, 37, 41);
-}
-
-.search-input:focus {
-  outline: none; 
-  box-shadow: none; 
-}
-
-.input-group-text {
-  border-radius: 0.5rem 0 0 0.5rem;
-  border: 1px solid rgb(222, 226, 230);
-}
-
-.btn-upgrade, .btn-ask {
+.btn-ask {
   background-color: rgb(250, 236, 229);
   color: rgb(102, 51, 26);
   font-weight: 600;
   border: 1px solid rgb(240, 205, 185);
 }
 
-.btn-upgrade:hover, .btn-ask:hover {
+.btn-ask:hover {
   background-color: rgb(102, 51, 26);
   color: rgb(250, 236, 229);
   font-weight: 600;
@@ -340,7 +266,7 @@ function formatDate(dateStr: string) {
 }
 
 .pdf-icon {
-  width: 32px;
+  width: 2rem;
   height: auto;
 }
 
@@ -349,7 +275,7 @@ function formatDate(dateStr: string) {
 }
 
 .file-row:hover {
-  background-color: #f9f9f9;
+  background-color: rgb(249 249 249);
 }
 
 .file-name {
@@ -390,31 +316,5 @@ function formatDate(dateStr: string) {
   background-color:rgb(102, 51, 26); 
   color: rgb(255, 255, 255);
   border: none;
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .row.py-2.border-bottom.fw-semibold {
-    display: none;
-  }
-
-  .header-topbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .search-form {
-    width: 100%;
-  }
-
-}
-.aiva-logo {
-  height: 3rem;
-  filter: invert(61%) sepia(39%) saturate(532%) hue-rotate(339deg) brightness(90%) contrast(85%);
-}
-
-.aiva-accent {
-  color: rgb(133, 102, 82);
-  font-size: 2rem;
 }
 </style>

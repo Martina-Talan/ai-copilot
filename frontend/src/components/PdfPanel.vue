@@ -17,24 +17,26 @@
   
   <style scoped>
   .pdf-panel {
-    max-height: 1000px;
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
     position: relative;
   }
-  
+    
   .pdf-viewer-container {
-    background: #f0f0f0;
-    padding: 10px;
+    background: rgb(240 240 240);
+    padding: 0.625rem;
   }
   
   .pdf-page-container {
-    margin-bottom: 20px;
+    margin-bottom: 1.25rem;
     box-shadow: 0 2px 5px rgba(0,0,0,.1);
     background: white;
   }
   
   .pdf-page-canvas {
     display: block;
-    border: 1px solid #ddd;
+    border: 1px solid rgb(221 221 221);
     margin: 0 auto;
   }
   </style>
