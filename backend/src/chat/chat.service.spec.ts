@@ -27,7 +27,7 @@ describe('ChatService', () => {
   it('should call the AI microservice and return the answer', async () => {
     const mockResponse = {
       answer: {
-        kontextAntwort: '1. AI is ...\n2. Extra: ...',
+        contextAnswer: '1. AI is ...\n2. Extra: ...',
       },
       sources: [{ documentId: 1, filename: 'demo.txt' }],
     };
